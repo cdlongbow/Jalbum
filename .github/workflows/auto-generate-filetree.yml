@@ -1,0 +1,126 @@
+name: Auto Generate Filetree
+
+on:
+  push:
+    branches:
+      - '**'
+    paths:
+      - 'Content/**'
+
+jobs:
+  auto-generate-filetree:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Auto Generate Filetree.json and update README.md
+        run: |
+          python3 << 'EOF'
+          import os
+          import json
+          import re
+          from datetime import datetime, timezone, timedelta
+          from urllib.parse import quote
+
+          CONTENT_DIR = "Content"
+          OUTPUT_FILE = "Filetree.json"
+          README_FILE = "README.md"
+
+          def build_tree(root_path):
+              tree = {}
+              total_num = 0
+              total_size = 0
+
+              for dirpath, dirnames, filenames in os.walk(root_path):
+                  dirnames[:] = [d for d in dirnames if not d.startswith('.')]
+
+                  rel_dir = os.path.relpath(dirpath, root_path)
+                  node = tree
+
+                  if rel_dir != ".":
+                      for part in rel_dir.replace("\\", "/").split("/"):
+                          node = node.setdefault(part, {})
+
+                  files = [f for f in filenames if not f.startswith('.')]
+                  for filename in sorted(files):
+                      filepath = os.path.join(dirpath, filename)
+                      node[filename] = ""
+                      try:
+                          total_num += 1
+                          total_size += os.path.getsize(filepath)
+                      except OSError:
+                          pass
+
+              return tree, total_num, total_size
+
+          def update_readme(readme_path, total_num):
+              if not os.path.exists(readme_path):
+                  return
+
+              with open(readme_path, "r", encoding="utf-8") as f:
+                  content = f.read()
+
+              now = datetime.now(timezone(timedelta(hours=8)))
+              date_text = f"{now.year}--{now.month}--{now.day}"
+              total_num_text = f"{total_num:,}"
+
+              total_num_badge = (
+                  f"![TotalNumber]"
+                  f"(https://img.shields.io/badge/{quote('全部写真数')}-{quote(total_num_text)}-blueviolet.svg)"
+              )
+              update_badge = (
+                  f"![AutoUpdate]"
+                  f"(https://img.shields.io/badge/{quote('更新日期')}-{quote(date_text)}-brightgreen.svg)"
+              )
+
+              content = re.sub(
+                  r'!\[TotalNumber\]\(https://img\.shields\.io/badge/[^)]+\)',
+                  total_num_badge,
+                  content
+              )
+              content = re.sub(
+                  r'!\[AutoUpdate\]\(https://img\.shields\.io/badge/[^)]+\)',
+                  update_badge,
+                  content
+              )
+
+              with open(readme_path, "w", encoding="utf-8") as f:
+                  f.write(content)
+
+          repo_root = os.getcwd()
+          content_root = os.path.join(repo_root, CONTENT_DIR)
+
+          if os.path.isdir(content_root):
+              content_tree, total_num, total_size = build_tree(content_root)
+          else:
+              content_tree, total_num, total_size = {}, 0, 0
+
+          result = {
+              "Content": content_tree,
+              "Information": {
+                  "TotalNum": str(total_num),
+                  "TotalSize": str(total_size)
+              }
+          }
+
+          with open(os.path.join(repo_root, OUTPUT_FILE), "w", encoding="utf-8") as f:
+              json.dump(result, f, ensure_ascii=False, indent=4)
+
+          update_readme(os.path.join(repo_root, README_FILE), total_num)
+          EOF
+
+      - name: Commit and push updated files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Filetree.json README.md
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "chore: update Filetree.json and README badges [skip ci]"
+            git push
+          fi
