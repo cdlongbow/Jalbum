@@ -1,6 +1,7 @@
 name: Auto Generate Filetree
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - '**'
